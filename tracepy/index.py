@@ -1,6 +1,7 @@
 import os
 import json
 import yaml
+from functools import lru_cache
 
 import numpy as np
 from scipy.optimize import curve_fit
@@ -26,6 +27,76 @@ def cauchy_two_term(x: float, B: float, C: float) -> float:
         Refractive index at the given wavelength.
     """
     return B + (C / (x ** 2))
+
+# Cache for glass dictionary to avoid loading it multiple times
+_glass_dict_cache = None
+_glass_catalog = ["schott", "ohara", "sumita", "cdgm", "hoya", "hikari",
+                  "vitron", "ami", "barberini", "lightpath", "lzos", "misc", "nsg"]
+
+def _load_glass_dict():
+    """Load the glass dictionary from disk, using a module-level cache."""
+    global _glass_dict_cache
+    if _glass_dict_cache is None:
+        with open(os.path.join(os.path.dirname(__file__), "glass", "glass_dict.json"), "r") as f:
+            _glass_dict_cache = json.load(f)
+    return _glass_dict_cache
+
+@lru_cache(maxsize=128)
+def _load_glass_data(glass_name: str, glass_manufacturer: str = None):
+    """Load glass data from YAML file with caching.
+    
+    Parameters
+    ----------
+    glass_name : str
+        Name of the glass material
+    glass_manufacturer : str, optional
+        Manufacturer name
+        
+    Returns
+    -------
+    tuple
+        (type_index_function, coeffs_or_data) where coeffs_or_data depends on formula type
+    """
+    glass_dict = _load_glass_dict()
+    
+    if glass_name in glass_dict:
+        if glass_manufacturer:
+            glass_manufacturer = glass_manufacturer.lower()
+            if glass_manufacturer in glass_dict[glass_name]:
+                glass_file = glass_dict[glass_name][glass_manufacturer]
+            else:
+                raise Exception(f"{glass_name} is not in the glass catalog for {glass_manufacturer}.")
+        else:
+            available = list(glass_dict[glass_name].keys())
+            # choose based on the defined priority order
+            priority = sorted(available, key=lambda x: _glass_catalog.index(x) if x in _glass_catalog else np.inf)
+            glass_file = glass_dict[glass_name][priority[0]]
+    else:
+        raise Exception(f"{glass_name} is not in the glass catalog.")
+    
+    # Process glass file
+    split_path = glass_file.split("\\")
+    if len(split_path) == 4:
+        glass_file_path = os.path.join(split_path[1], split_path[2], split_path[3])
+    else:
+        glass_file_path = os.path.join(split_path[1], split_path[2], split_path[3], split_path[4])
+    
+    with open(os.path.join(os.path.dirname(__file__), glass_file_path)) as f:
+        data = yaml.load(f, Loader=yaml.BaseLoader)
+    
+    type_index_function = data["DATA"][0]["type"]
+    
+    if type_index_function in ['formula 1', 'formula 2', 'formula 3', 'formula 5']:
+        coeffs = tuple(float(x) for x in data["DATA"][0]['coefficients'].split())
+        return (type_index_function, coeffs)
+    elif type_index_function in ['tabulated n', 'tabulated nk']:
+        raw_data = data["DATA"][0]['data'].strip().split('\n')
+        wavelength = np.array([float(line.split()[0]) for line in raw_data])
+        index = np.array([float(line.split()[1]) for line in raw_data])
+        popt, _ = curve_fit(cauchy_two_term, wavelength, index)
+        return (type_index_function, tuple(popt))
+    else:
+        raise ValueError(f"Unsupported formula type: {type_index_function}")
 
 # TODO: This function, written by @MikeMork, needs to be broken up into several smaller functions with explicit typing.
 def glass_index(glass):
@@ -61,12 +132,6 @@ def glass_index(glass):
 
     The functions that this function returns take a wavelength in microns and return the index of refractive index.
     '''
-    # Load glass dictionary
-    with open(os.path.join(os.path.dirname(__file__), "glass", "glass_dict.json"), "r") as f:
-        glass_dict = json.load(f)
-    glass_catalog = ["schott", "ohara", "sumita", "cdgm", "hoya", "hikari",
-                     "vitron", "ami", "barberini", "lightpath", "lzos", "misc", "nsg"]
-
     # Process input and return glass file:
     if isinstance(glass, (float, int)):
         constant_index = float(glass)
@@ -74,41 +139,21 @@ def glass_index(glass):
     elif isinstance(glass, str):
         input_list = glass.split()
         glass_name = input_list[0]
-        glass_manufacturer = input_list[1].lower() if len(input_list) > 1 else None
-
-        if glass_name in glass_dict:
-            if glass_manufacturer:
-                if glass_manufacturer in glass_dict[glass_name]:
-                    glass_file = glass_dict[glass_name][glass_manufacturer]
-                else:
-                    raise Exception(f"{glass_name} is not in the glass catalog for {glass_manufacturer}.")
-            else:
-                available = list(glass_dict[glass_name].keys())
-                # choose based on the defined priority order
-                priority = sorted(available, key=lambda x: glass_catalog.index(x) if x in glass_catalog else np.inf)
-                glass_file = glass_dict[glass_name][priority[0]]
-        else:
-            raise Exception(f"{glass_name} is not in the glass catalog.")
-
-        # Process glass file and return the correct function (wavelength in microns)
-        split_path = glass_file.split("\\")
-        if len(split_path) == 4:
-            glass_file_path = os.path.join(split_path[1], split_path[2], split_path[3])
-        else:
-            glass_file_path = os.path.join(split_path[1], split_path[2], split_path[3], split_path[4])
-        f = yaml.load(open(os.path.join(os.path.dirname(__file__), glass_file_path)), Loader=yaml.BaseLoader)
-        type_index_function = f["DATA"][0]["type"]
+        glass_manufacturer = input_list[1] if len(input_list) > 1 else None
+        
+        # Load glass data using cached function
+        type_index_function, data = _load_glass_data(glass_name, glass_manufacturer)
         
         # Use np.asarray(x) so that the operations are vectorized
         if type_index_function == 'formula 1':
-            coeffs = [float(x) for x in f["DATA"][0]['coefficients'].split()]
+            coeffs = data
             return lambda x=0.55: np.sqrt(
                 1 + coeffs[0] +
                 coeffs[1] / (1 - (coeffs[2] / np.asarray(x))**2) +
                 coeffs[3] / (1 - (coeffs[4] / np.asarray(x))**2)
             )
         elif type_index_function == 'formula 2':
-            coeffs = [float(x) for x in f["DATA"][0]['coefficients'].split()]
+            coeffs = data
             if len(coeffs) >= 7:
                 return lambda x=0.55: np.sqrt(
                     1 +
@@ -123,7 +168,7 @@ def glass_index(glass):
                     coeffs[3] / (1 - coeffs[4] / np.asarray(x)**2)
                 )
         elif type_index_function == 'formula 3':
-            coeffs = [float(x) for x in f["DATA"][0]['coefficients'].split()]
+            coeffs = data
             return lambda x=0.55: np.sqrt(
                 coeffs[0] -
                 coeffs[1] * np.asarray(x)**coeffs[2] +
@@ -133,15 +178,12 @@ def glass_index(glass):
                 coeffs[9] * np.asarray(x)**coeffs[10]
             )
         elif type_index_function == 'formula 5':
-            coeffs = [float(x) for x in f["DATA"][0]['coefficients'].split()]
+            coeffs = data
             return lambda x=0.55: (coeffs[0] -
                                      coeffs[1] * np.asarray(x)**coeffs[2] +
                                      coeffs[3] * np.asarray(x)**(-coeffs[4]))
         elif type_index_function in ['tabulated n', 'tabulated nk']:
-            raw_data = f["DATA"][0]['data'].strip().split('\n')
-            wavelength = np.array([float(line.split()[0]) for line in raw_data])
-            index = np.array([float(line.split()[1]) for line in raw_data])
-            popt, _ = curve_fit(cauchy_two_term, wavelength, index)
+            popt = data
             return lambda x=0.55: popt[0] + popt[1] / (np.asarray(x)**2)
     else:
         raise TypeError("Glass must be either a float/int or a string.")

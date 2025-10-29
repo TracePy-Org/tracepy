@@ -87,7 +87,7 @@ class geometry:
                 raise Exception("Specify a kappa for this conic.")
             elif self.kappa > 0:
                 print("Warning: Specified c value is not used when kappa>0")
-                self.c = np.sqrt(1 / (self.kappa * pow(self.Diam / 2., 2)))
+                self.c = np.sqrt(1 / (self.kappa * (self.Diam / 2.)**2))
         elif self.c == 0 and self.kappa is None:
             # Used for planes, does not affect calculations.
             self.kappa = 1.
@@ -141,13 +141,15 @@ class geometry:
             Derivative of the surface at the point given.
         """
         X, Y, Z = point
-        rho = np.sqrt(pow(X, 2) + pow(Y, 2))
+        rho_sq = X**2 + Y**2
+        rho = np.sqrt(rho_sq)
         if rho > self.Diam / 2. or rho < self.diam / 2.:
             raise NotOnSurfaceError()
         if self.kappa is None:
             raise ValueError("kappa must not be None for conic calculations")
-        function = Z - self.c * pow(rho, 2) / (1 + pow((1 - self.kappa * pow(self.c, 2) * pow(rho, 2)), 0.5))
-        E = self.c / pow((1 - self.kappa * pow(self.c, 2) * pow(rho, 2)), 0.5)
+        sqrt_term = (1 - self.kappa * self.c**2 * rho_sq)**0.5
+        function = Z - self.c * rho_sq / (1 + sqrt_term)
+        E = self.c / sqrt_term
         derivative = [-X * E, -Y * E, 1.]
         return function, derivative
 
@@ -204,12 +206,12 @@ class geometry:
             np.array of Z values for each X,Y pair.
         """
         X, Y = point[:, 0], point[:, 1]
-        rho = np.sqrt(pow(X, 2) + pow(Y, 2))
+        rho = np.sqrt(X**2 + Y**2)
         function = np.zeros(len(point))
         nan_idx = (rho > self.Diam / 2.) + (rho < self.diam / 2.)
-        rho = np.sqrt(pow(X[~nan_idx], 2) + pow(Y[~nan_idx], 2))
         function[nan_idx] = np.nan
         if self.kappa is None:
             raise ValueError("kappa must not be None for conic plot calculations")
-        function[~nan_idx] = self.c * pow(rho, 2) / (1 + pow((1 - self.kappa * pow(self.c, 2) * pow(rho, 2)), 0.5))
+        rho_valid = rho[~nan_idx]
+        function[~nan_idx] = self.c * rho_valid**2 / (1 + (1 - self.kappa * self.c**2 * rho_valid**2)**0.5)
         return function
