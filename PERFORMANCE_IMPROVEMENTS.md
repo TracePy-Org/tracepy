@@ -92,6 +92,13 @@ All existing tests continue to pass:
 
 ## Performance Benchmarks
 
+### Test Environment
+- Python 3.12.3
+- NumPy 2.3.4
+- Test system: Linux x86_64
+- Single-threaded execution
+- Measurements averaged over multiple runs
+
 ### Before Optimizations
 - Glass index loading: 3.49ms per call
 - 100 glass loads: 349ms
@@ -102,6 +109,8 @@ All existing tests continue to pass:
 - 100 glass loads: 4.2ms (**83x faster**)
 - Ray tracing 2000 rays: ~5.8ms (**6% faster**)
 - Conics plot: **2x faster**
+
+**Note:** Actual performance gains may vary depending on hardware, Python version, and workload characteristics. The improvements are most significant for workloads involving repeated glass index lookups and large numbers of geometric calculations.
 
 ## Code Quality
 
