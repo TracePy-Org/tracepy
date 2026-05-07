@@ -86,8 +86,12 @@ class geometry:
             if self.kappa is None:
                 raise Exception("Specify a kappa for this conic.")
             elif self.kappa > 0:
-                print("Warning: Specified c value is not used when kappa>0")
-                self.c = np.sqrt(1 / (self.kappa * pow(self.Diam / 2., 2)))
+                if pow(self.Diam / 2., 2) > 1/(self.kappa*pow(self.c, 2)):
+                    print("Warning: Specified c value had to be changed in accordance with the conditions of the conic euqation.")
+                    if self.c > 0:
+                        self.c = np.sqrt(1 / (self.kappa * pow(self.Diam / 2., 2)))
+                    elif self.c < 0:
+                        self.c = -np.sqrt(1 / (self.kappa * pow(self.Diam / 2., 2)))
         elif self.c == 0 and self.kappa is None:
             # Used for planes, does not affect calculations.
             self.kappa = 1.
